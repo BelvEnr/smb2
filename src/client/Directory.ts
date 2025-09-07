@@ -142,22 +142,40 @@ class Directory extends EventEmitter {
     });
   }
 
-  async read() {
+  async read(): Promise<DirectoryEntry[]> {
+    
+  let entries: DirectoryEntry[] = [];
+  let finished = false;
+  let resumeHandle: Buffer | undefined = undefined;
+
+  while (!finished) {
     const response = await this.tree.request({ type: PacketType.QueryDirectory }, {
       fileId: this._id,
-      buffer: Buffer.from("*", "ucs2")
+      buffer: Buffer.from("*", "ucs2"),
+      ...(resumeHandle ? { resumeHandle } : {})
     });
 
-    let entries: DirectoryEntry[] = [];
     if (response.data) {
-      entries = response.data.filter(x => x.filename !== "." && x.filename !== "..")
-    } else {
-      console.warn("response without data", response);
+      // Filter out "." and ".."
+      const filtered = response.data.filter(x => x.filename !== "." && x.filename !== "..");
+      entries = entries.concat(filtered);
+
+      // If resumeHandle available, use it for next query (optional, depends on your SMB2 impl)
+      if (response.resumeHandle) {
+        resumeHandle = response.resumeHandle;
+      }
     }
 
-    return entries;
+    // Check for STATUS_NO_MORE_FILES error code
+    if (response.error && response.error.code === 'STATUS_NO_MORE_FILES') {
+      finished = true;
+    } else if (!response.data || (response.data.length === 0)) {
+      finished = true;
+    }
   }
 
+  return entries;
+}
   async exists(path: string) {
     try {
       await this.open(path);
